@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Magic Hotkey</title>
+    <script type="module" src="/main.js" defer></script>
+  </head>
+  <body>
+    <!-- Command palette view -->
+    <div id="palette-view">
+      <div class="toolbar">
+        <input
+          id="search"
+          type="text"
+          placeholder="Type a command..."
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button id="settings-btn" title="Settings">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </button>
+      </div>
+      <ul id="results"></ul>
+    </div>
+
+    <!-- Settings view -->
+    <div id="settings-view" class="hidden">
+      <div class="toolbar">
+        <button id="back-btn" title="Back to commands">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>
+          </svg>
+        </button>
+        <span class="toolbar-title">Settings</span>
+      </div>
+
+      <div class="settings-body">
+        <section>
+          <div class="toggle-row">
+            <span class="toggle-label">Launch on startup</span>
+            <label class="switch">
+              <input id="autostart-toggle" type="checkbox" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <small class="hint">Automatically start Magic Hotkey when you log in.</small>
+        </section>
+
+        <section>
+          <div class="toggle-row">
+            <span class="toggle-label">Auto-paste after copy</span>
+            <label class="switch">
+              <input id="autopaste-toggle" type="checkbox" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <small class="hint">Automatically Ctrl+V after a command copies to clipboard.</small>
+        </section>
+
+        <section>
+          <label>Global Hotkey</label>
+          <div class="hotkey-row">
+            <input id="hotkey-input" type="text" readonly placeholder="Press keys..." />
+            <button id="hotkey-record-btn" class="small-btn">Record</button>
+          </div>
+          <small class="hint">Default: Ctrl+Shift+H</small>
+        </section>
+
+        <section>
+          <div class="section-header">
+            <label>Commands</label>
+            <button id="add-cmd-btn" class="small-btn">+ New Pipeline</button>
+          </div>
+          <ul id="cmd-list"></ul>
+        </section>
+
+        <section>
+          <div class="section-header">
+            <label>Secrets</label>
+            <button id="add-secret-btn" class="small-btn">+ Add</button>
+          </div>
+          <div id="secret-form" class="hidden">
+            <input id="secret-key" type="text" placeholder="Secret name (e.g. api_token)" />
+            <input id="secret-value" type="password" placeholder="Secret value" />
+            <div class="form-actions">
+              <button id="save-secret-btn" class="primary-btn">Save to Keychain</button>
+              <button id="cancel-secret-btn" class="small-btn">Cancel</button>
+            </div>
+          </div>
+          <small class="hint">Secrets are stored in your OS keychain, not in config files.</small>
+        </section>
+
+        <button id="save-settings-btn" class="primary-btn full-width">Save Settings</button>
+      </div>
+    </div>
+
+    <!-- Pipeline editor modal -->
+    <div id="cmd-modal" class="hidden">
+      <div class="modal-content">
+        <h3 id="cmd-modal-title">New Pipeline</h3>
+        <label>Name</label>
+        <input id="cmd-name" type="text" placeholder="e.g. Get Encoded API Token" />
+
+        <label>Pipeline</label>
+        <small class="hint" style="margin-bottom:8px">First step reads from clipboard (or generates). Each step pipes into the next.</small>
+        <div id="pipeline-steps"></div>
+        <button id="add-step-btn" class="small-btn" style="margin-top:6px">+ Add Step</button>
+
+        <label style="margin-top:14px">Shortcut (optional)</label>
+        <div class="hotkey-row">
+          <input id="cmd-hotkey-input" type="text" readonly placeholder="None" />
+          <button id="cmd-hotkey-record-btn" class="small-btn">Record</button>
+          <button id="cmd-hotkey-clear-btn" class="small-btn">Clear</button>
+        </div>
+        <small class="hint">Assign a global hotkey to run this pipeline directly, without opening the palette.</small>
+
+        <label style="margin-top:10px">Auto-trigger (optional)</label>
+        <input id="cmd-trigger-input" type="text" placeholder="Regex pattern, e.g. ^eyJ (matches JWTs)" />
+        <small class="hint">When clipboard content matches this regex, the pipeline runs automatically.</small>
+
+        <div class="form-actions" style="margin-top:14px">
+          <button id="cmd-save-btn" class="primary-btn">Save</button>
+          <button id="cmd-cancel-btn" class="small-btn">Cancel</button>
+          <button id="cmd-delete-btn" class="danger-btn hidden">Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Snippet prompt view -->
+    <div id="snippet-view" class="hidden">
+      <div class="snippet-panel">
+        <div class="snippet-header">
+          <span id="snippet-var-name" class="snippet-var-label">variable</span>
+          <span id="snippet-progress" class="snippet-progress">1 / 3</span>
+        </div>
+        <input id="snippet-input" type="text" autocomplete="off" spellcheck="false" placeholder="Type value..." />
+        <pre id="snippet-preview" class="snippet-preview"></pre>
+        <div class="snippet-hints">Enter next &middot; Shift+Enter back &middot; Esc cancel</div>
+      </div>
+    </div>
+
+    <!-- Result overlay (for count, etc.) -->
+    <div id="result-overlay" class="hidden">
+      <div class="result-panel">
+        <h3 id="result-title">Result</h3>
+        <div id="result-body"></div>
+      </div>
+    </div>
+
+    <div id="toast" class="hidden"></div>
+  </body>
+</html>
