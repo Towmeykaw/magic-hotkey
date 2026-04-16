@@ -8,15 +8,7 @@ Built with [Tauri v2](https://tauri.app/) (Rust + HTML/CSS/JS). Runs on Windows 
 
 Press **Ctrl+Shift+H** (customizable) and a small floating palette appears:
 
-```
- ┌──────────────────────────────────────────────────────┐
- │  Type a command...                               [⚙] │
- ├──────────────────────────────────────────────────────┤
- │  Generate GUID                        Generate GUID  │
- │  Base64 Encode                        Base64 Encode  │
- │  Get API Token        Secret:api_token → UPPERCASE   │
- └──────────────────────────────────────────────────────┘
-```
+![Magic Hotkey palette](readme-image.png)
 
 - Type to filter, arrow keys to navigate, **Enter** to execute
 - Result is copied to your clipboard instantly
@@ -31,7 +23,7 @@ Commands are **pipelines** — one or more actions chained together. Each step's
 ```
 secret:api_token  →  base64_encode  →  uppercase
      ↓                    ↓                ↓
-  "sk-abc123"      "c2stYWJjMTIz"   "C2STYWIJMTIZ"
+  "sk-abc123"      "c2stYWJjMTIz"   "C2STYWJJMTIZ"
 ```
 
 Single-step pipelines work like simple commands. Multi-step pipelines unlock powerful combinations:
@@ -271,7 +263,7 @@ Build the CLI with `cargo build --bin mh` from the `src-tauri/` directory.
 | Tool | Version | Notes |
 |------|---------|-------|
 | [Node.js](https://nodejs.org/) | 18+ | For the Tauri CLI and frontend tooling |
-| [Rust](https://rustup.rs/) | 1.70+ | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| [Rust](https://rustup.rs/) | 1.77+ | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
 
 #### Windows only
 
@@ -319,13 +311,13 @@ magic-hotkey/
 │   ├── src/
 │   │   ├── lib.rs                # App setup, pipeline execution, hotkey, IPC
 │   │   ├── commands.rs           # All action implementations
-│   │   └── main.rs               # Entry point
+│   │   ├── main.rs               # Entry point
+│   │   └── bin/mh.rs             # CLI tool
 │   ├── capabilities/
 │   │   └── default.json          # Tauri permissions
 │   ├── Cargo.toml                # Rust dependencies
 │   └── tauri.conf.json           # Window config, app identity, bundling
-├── package.json
-└── BACKLOG.md                    # Feature backlog and roadmap
+└── package.json
 ```
 
 ### Adding a New Action
