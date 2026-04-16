@@ -1,9 +1,10 @@
 [package]
 name = "magic-hotkey"
-version = "0.1.0"
+version = "0.1.1"
 description = "A global hotkey command palette"
 authors = ["towmeykaw"]
 edition = "2021"
+default-run = "magic-hotkey"
 
 [lib]
 name = "magic_hotkey_lib"

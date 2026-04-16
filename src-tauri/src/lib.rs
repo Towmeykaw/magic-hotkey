@@ -637,7 +637,7 @@ pub fn run() {
             let tray_icon = Image::from_bytes(include_bytes!("../../magic-hotkey.png"))
                 .expect("failed to load tray icon");
 
-            let _tray = TrayIconBuilder::new()
+            let tray = TrayIconBuilder::new()
                 .icon(tray_icon)
                 .tooltip("Magic Hotkey")
                 .menu(&tray_menu)
@@ -673,6 +673,9 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            // Store the tray icon in managed state so it isn't dropped
+            app.manage(Mutex::new(tray));
 
             Ok(())
         })
