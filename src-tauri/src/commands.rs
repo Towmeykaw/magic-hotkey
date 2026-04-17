@@ -398,6 +398,56 @@ pub fn lorem_ipsum(input: &str) -> Result<String, String> {
     }
 }
 
+// ── Dice roller ─────────────────────────────────────────────────────
+
+pub fn roll_dice(spec: &str) -> Result<String, String> {
+    let trimmed = spec.trim().to_lowercase();
+    let re = regex::Regex::new(r"^(\d*)d(\d+)\s*(?:([+-])\s*(\d+))?$")
+        .expect("hardcoded regex is valid");
+    let caps = re.captures(&trimmed).ok_or_else(|| {
+        format!("Invalid dice notation '{}'. Expected NdM or NdM±K (e.g. 1d20, 3d6+2)", spec)
+    })?;
+
+    let n_str = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+    let n: u32 = if n_str.is_empty() { 1 } else {
+        n_str.parse().map_err(|_| format!("Invalid dice count: '{}'", n_str))?
+    };
+    let sides: u32 = caps.get(2).unwrap().as_str().parse()
+        .map_err(|_| "Invalid number of sides".to_string())?;
+    let modifier: i32 = match (caps.get(3), caps.get(4)) {
+        (Some(sign), Some(num)) => {
+            let val: i32 = num.as_str().parse()
+                .map_err(|_| "Invalid modifier".to_string())?;
+            if sign.as_str() == "-" { -val } else { val }
+        }
+        _ => 0,
+    };
+
+    if n == 0 { return Err("Number of dice must be at least 1".into()); }
+    if n > 100 { return Err("Number of dice too high (max 100)".into()); }
+    if sides < 2 { return Err("Sides must be at least 2".into()); }
+    if sides > 1000 { return Err("Sides too high (max 1000)".into()); }
+
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    let rolls: Vec<u32> = (0..n).map(|_| rng.gen_range(1..=sides)).collect();
+    let roll_sum: i32 = rolls.iter().map(|&r| r as i32).sum();
+    let total = roll_sum + modifier;
+
+    let rolls_str = rolls.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", ");
+    let display = match modifier.cmp(&0) {
+        std::cmp::Ordering::Greater => format!("[{}] + {}", rolls_str, modifier),
+        std::cmp::Ordering::Less => format!("[{}] - {}", rolls_str, modifier.abs()),
+        std::cmp::Ordering::Equal => format!("[{}]", rolls_str),
+    };
+
+    let result = serde_json::json!({
+        "total": total,
+        "rolls": display,
+    });
+    serde_json::to_string(&result).map_err(|e| format!("Serialize error: {}", e))
+}
+
 // ── Regex extract ───────────────────────────────────────────────────
 
 pub fn regex_extract(input: &str, pattern: &str) -> Result<String, String> {
@@ -1274,6 +1324,69 @@ mod tests {
     fn test_lorem_capitalized() {
         let result = lorem_ipsum("3 words").unwrap();
         assert!(result.chars().next().unwrap().is_uppercase());
+    }
+
+    // ── Dice roller ─────────────────────────────────────────────────
+
+    fn parse_roll(json: &str) -> (i64, String) {
+        let v: serde_json::Value = serde_json::from_str(json).unwrap();
+        (v["total"].as_i64().unwrap(), v["rolls"].as_str().unwrap().to_string())
+    }
+
+    #[test]
+    fn test_roll_d20() {
+        let (total, rolls) = parse_roll(&roll_dice("1d20").unwrap());
+        assert!((1..=20).contains(&total));
+        assert!(rolls.starts_with('[') && rolls.ends_with(']'));
+    }
+
+    #[test]
+    fn test_roll_leading_n_optional() {
+        let (total, _) = parse_roll(&roll_dice("d6").unwrap());
+        assert!((1..=6).contains(&total));
+    }
+
+    #[test]
+    fn test_roll_with_positive_modifier() {
+        let (total, rolls) = parse_roll(&roll_dice("3d6+2").unwrap());
+        assert!((5..=20).contains(&total)); // 3..18 + 2
+        assert!(rolls.contains("+ 2"));
+    }
+
+    #[test]
+    fn test_roll_with_negative_modifier() {
+        let (total, rolls) = parse_roll(&roll_dice("2d8-1").unwrap());
+        assert!((1..=15).contains(&total)); // 2..16 - 1
+        assert!(rolls.contains("- 1"));
+    }
+
+    #[test]
+    fn test_roll_case_insensitive() {
+        let (total, _) = parse_roll(&roll_dice("1D20").unwrap());
+        assert!((1..=20).contains(&total));
+    }
+
+    #[test]
+    fn test_roll_whitespace_in_modifier() {
+        let (total, _) = parse_roll(&roll_dice("2d6 + 3").unwrap());
+        assert!((5..=15).contains(&total));
+    }
+
+    #[test]
+    fn test_roll_invalid() {
+        assert!(roll_dice("").is_err());
+        assert!(roll_dice("hello").is_err());
+        assert!(roll_dice("1d").is_err());
+        assert!(roll_dice("d").is_err());
+        assert!(roll_dice("0d6").is_err());
+        assert!(roll_dice("1d1").is_err());
+        assert!(roll_dice("1d20+").is_err());
+    }
+
+    #[test]
+    fn test_roll_caps_limits() {
+        assert!(roll_dice("101d6").is_err());
+        assert!(roll_dice("1d1001").is_err());
     }
 
     // ── Regex extract ───────────────────────────────────────────────

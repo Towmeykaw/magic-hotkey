@@ -51,6 +51,7 @@ Single-step pipelines work like simple commands. Multi-step pipelines unlock pow
 | `secret` | Retrieve a named secret from OS keychain |
 | `snippet` | Text template with `{{variable}}` placeholders — prompts for each value |
 | `lorem_ipsum` | Generate placeholder text (key: `"50 words"`, `"3 sentences"`, `"2 paragraphs"`) |
+| `roll` | Roll dice — NdM±K notation (key: `1d20`, `3d6+2`, `4d6-1`). Leave key blank to prompt at runtime. |
 
 **Transformers** (transform input, can be chained):
 
@@ -237,6 +238,10 @@ echo '{"a":1}' | mh convert json toml
 # Color & Number
 mh color "#ff5500"
 mh number 0xff
+
+# Dice
+mh roll 1d20
+mh roll 3d6+2
 
 # Chain actions
 echo "hello" | mh pipe base64_encode uppercase trim

@@ -153,6 +153,7 @@ fn default_commands() -> Vec<CommandDef> {
         cmd("TOML → JSON", vec![step("toml_to_json")]),
         cmd("Lorem Ipsum (50 words)", vec![PipelineStep { action: "lorem_ipsum".into(), key: Some("50 words".into()), template: None }]),
         cmd("Lorem Ipsum (3 paragraphs)", vec![PipelineStep { action: "lorem_ipsum".into(), key: Some("3 paragraphs".into()), template: None }]),
+        cmd("Roll Dice", vec![step("roll")]),
         cmd("Count", vec![step("count")]),
     ]
 }
@@ -194,7 +195,7 @@ pub fn load_commands() -> Vec<CommandDef> {
 // ── Pipeline execution ──────────────────────────────────────────────
 
 pub fn is_generator(action: &str) -> bool {
-    matches!(action, "generate_guid" | "secret" | "timestamp_iso" | "timestamp_unix" | "timestamp_utc" | "snippet" | "lorem_ipsum")
+    matches!(action, "generate_guid" | "secret" | "timestamp_iso" | "timestamp_unix" | "timestamp_utc" | "snippet" | "lorem_ipsum" | "roll")
 }
 
 pub fn run_action(action: &str, input: &str, key: Option<&str>) -> Result<String, String> {
@@ -213,6 +214,10 @@ pub fn run_action(action: &str, input: &str, key: Option<&str>) -> Result<String
             // key holds the count spec (e.g. "5 words", "3 paragraphs")
             let spec = key.unwrap_or("50 words");
             commands::lorem_ipsum(spec)
+        }
+        "roll" => {
+            let spec = key.ok_or("Missing dice notation for roll action (e.g. 1d20, 3d6+2)")?;
+            commands::roll_dice(spec)
         }
         "regex_extract" => {
             let pattern = key.ok_or("Missing regex pattern")?;
@@ -604,9 +609,12 @@ pub fn run() {
                         if let Some(ref pattern) = cmd.trigger {
                             if let Ok(re) = regex::Regex::new(pattern) {
                                 if re.is_match(&current) {
-                                    // Skip snippet commands (need UI)
-                                    let has_snippet = cmd.steps.iter().any(|s| s.action == "snippet");
-                                    if has_snippet {
+                                    // Skip commands that need runtime prompts (snippets, keyless rolls)
+                                    let needs_prompt = cmd.steps.iter().any(|s|
+                                        s.action == "snippet"
+                                        || (s.action == "roll" && s.key.is_none())
+                                    );
+                                    if needs_prompt {
                                         continue;
                                     }
                                     // Execute the pipeline

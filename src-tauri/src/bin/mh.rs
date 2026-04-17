@@ -33,6 +33,8 @@ const EXAMPLES: &str = "\x1b[1mExamples:\x1b[0m
   echo \"255\" | mh number
   echo \"hello\" | mh pipe base64_encode uppercase trim
   mh run \"My Custom Pipeline\" < input.txt
+  mh roll 1d20
+  mh roll 3d6+2
   mh list
   mh secret set api_token
   mh secret get api_token";
@@ -133,6 +135,13 @@ enum Commands {
     Regex {
         /// Regex pattern (use capture groups to extract specific parts)
         pattern: String,
+    },
+
+    /// Roll dice (e.g. 1d20, 3d6+2, 4d6)
+    Roll {
+        /// Dice notation: NdM or NdM±K (N defaults to 1)
+        #[arg(value_name = "NOTATION")]
+        spec: Vec<String>,
     },
 
     /// Manage secrets in the OS keychain
@@ -393,6 +402,25 @@ fn main() {
         Commands::Regex { pattern } => {
             let input = read_stdin();
             run_and_print("regex_extract", &input, Some(&pattern));
+        }
+
+        Commands::Roll { spec } => {
+            let spec_str = spec.join("");
+            if spec_str.is_empty() {
+                eprintln!("error: provide dice notation (e.g. 1d20, 3d6+2)");
+                std::process::exit(1);
+            }
+            match commands::roll_dice(&spec_str) {
+                Ok(json) => {
+                    if let Ok(data) = serde_json::from_str::<serde_json::Value>(&json) {
+                        println!("Rolls: {}", data["rolls"].as_str().unwrap_or(""));
+                        println!("Total: {}", data["total"]);
+                    } else {
+                        print!("{}", json);
+                    }
+                }
+                Err(e) => { eprintln!("error: {}", e); std::process::exit(1); }
+            }
         }
 
         Commands::Secret { action } => match action {

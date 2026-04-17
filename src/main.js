@@ -37,6 +37,7 @@ const ACTIONS = [
   { value: "lowercase",     label: "lowercase", type: "transformer" },
   { value: "trim",          label: "Trim whitespace", type: "transformer" },
   { value: "lorem_ipsum",   label: "Lorem Ipsum", type: "generator", hasKey: true },
+  { value: "roll",          label: "Roll Dice", type: "generator", keyOptional: true, keyPlaceholder: "e.g. 1d20 (blank = prompt at runtime)", display: true },
   { value: "regex_extract", label: "Regex Extract", type: "transformer", hasKey: true },
   { value: "count",         label: "Count", type: "transformer", display: true },
   { value: "snippet",      label: "Snippet (template)", type: "generator", hasTemplate: true },
@@ -100,6 +101,9 @@ const snippetVarNameEl = document.getElementById("snippet-var-name");
 const snippetProgressEl = document.getElementById("snippet-progress");
 const snippetInputEl = document.getElementById("snippet-input");
 const snippetPreviewEl = document.getElementById("snippet-preview");
+
+const rollPromptView = document.getElementById("roll-prompt-view");
+const rollPromptInput = document.getElementById("roll-prompt-input");
 
 const cmdHotkeyInput = document.getElementById("cmd-hotkey-input");
 const cmdHotkeyRecordBtn = document.getElementById("cmd-hotkey-record-btn");
@@ -221,6 +225,10 @@ function hasSnippetStep(cmd) {
   return cmd.steps.some(s => s.action === "snippet");
 }
 
+function hasRollPromptStep(cmd) {
+  return cmd.steps.some(s => s.action === "roll" && !s.key);
+}
+
 async function executeAt(index, filtered) {
   const cmd = filtered[index];
   if (!cmd) return;
@@ -228,6 +236,12 @@ async function executeAt(index, filtered) {
   // If command has a snippet step, start the snippet prompt flow
   if (hasSnippetStep(cmd)) {
     startSnippetPrompt(cmd);
+    return;
+  }
+
+  // If command has a roll step without a preset notation, prompt for it
+  if (hasRollPromptStep(cmd)) {
+    startRollPrompt(cmd);
     return;
   }
 
@@ -258,6 +272,8 @@ function showResultOverlay(resultJson, title) {
     words: "Words",
     lines: "Lines",
     bytes: "Bytes",
+    total: "Total",
+    rolls: "Rolls",
   };
 
   body.innerHTML = "";
@@ -471,13 +487,13 @@ function renderPipelineSteps() {
     });
     row.appendChild(select);
 
-    // Secret key input
+    // Key input (required for hasKey, optional for keyOptional)
     const meta = actionMeta(step.action);
-    if (meta.hasKey) {
+    if (meta.hasKey || meta.keyOptional) {
       const keyInput = document.createElement("input");
       keyInput.type = "text";
       keyInput.className = "step-key";
-      keyInput.placeholder = "key name";
+      keyInput.placeholder = meta.keyPlaceholder || "key name";
       keyInput.value = step.key || "";
       keyInput.addEventListener("input", () => { step.key = keyInput.value; });
       row.appendChild(keyInput);
@@ -563,6 +579,7 @@ async function saveCommand() {
     const meta = actionMeta(s.action);
     const step = { action: s.action };
     if (meta.hasKey) step.key = s.key.trim();
+    else if (meta.keyOptional && s.key?.trim()) step.key = s.key.trim();
     if (meta.hasTemplate) step.template = s.template.trim();
     return step;
   });
@@ -737,6 +754,61 @@ snippetInputEl.addEventListener("input", () => {
   updateSnippetPreview();
 });
 
+// ── Roll prompt ──────────────────────────────────────────────────────
+
+let rollPromptCmd = null;
+
+function startRollPrompt(cmd) {
+  rollPromptCmd = cmd;
+  paletteView.classList.add("hidden");
+  settingsView.classList.add("hidden");
+  snippetView.classList.add("hidden");
+  rollPromptView.classList.remove("hidden");
+  rollPromptInput.value = "";
+  rollPromptInput.focus();
+}
+
+function cancelRollPrompt() {
+  rollPromptView.classList.add("hidden");
+  paletteView.classList.remove("hidden");
+  searchEl.focus();
+}
+
+async function finishRollPrompt() {
+  const notation = rollPromptInput.value.trim();
+  if (!notation) { showToast("Enter dice notation", true); return; }
+
+  const steps = rollPromptCmd.steps.map(s =>
+    s.action === "roll" && !s.key ? { ...s, key: notation } : s
+  );
+
+  rollPromptView.classList.add("hidden");
+  paletteView.classList.remove("hidden");
+
+  try {
+    const result = await invoke("execute_command", { steps });
+    if (isDisplayCommand(rollPromptCmd)) {
+      showResultOverlay(result, rollPromptCmd.name);
+    } else {
+      showToast("Copied!");
+      setTimeout(() => invoke("hide_window"), 350);
+    }
+  } catch (err) {
+    showToast("Error: " + err, true);
+    searchEl.focus();
+  }
+}
+
+rollPromptInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    finishRollPrompt();
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    cancelRollPrompt();
+  }
+});
+
 // ── Secrets ──────────────────────────────────────────────────────────
 
 async function saveSecret() {
@@ -882,6 +954,8 @@ listen("execute-by-name", async (event) => {
   if (!cmd) return;
   if (hasSnippetStep(cmd)) {
     startSnippetPrompt(cmd);
+  } else if (hasRollPromptStep(cmd)) {
+    startRollPrompt(cmd);
   } else {
     try {
       const result = await invoke("execute_command", { steps: cmd.steps });
