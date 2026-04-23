@@ -9,8 +9,10 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_clipboard_manager::ClipboardExt;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_updater::UpdaterExt;
 
 pub mod commands;
 
@@ -394,6 +396,83 @@ fn execute_pipeline(app: &AppHandle, steps: &[PipelineStep]) -> Result<String, S
     Ok(value)
 }
 
+// ── Updates ─────────────────────────────────────────────────────────
+
+async fn check_and_prompt_update(app: AppHandle, user_initiated: bool) {
+    let updater = match app.updater() {
+        Ok(u) => u,
+        Err(e) => {
+            if user_initiated {
+                app.dialog()
+                    .message(format!("Update check failed: {}", e))
+                    .title("Magic Hotkey")
+                    .show(|_| {});
+            }
+            return;
+        }
+    };
+
+    match updater.check().await {
+        Ok(Some(update)) => {
+            let version = update.version.clone();
+            let notes = update
+                .body
+                .clone()
+                .unwrap_or_else(|| "No release notes provided.".to_string());
+            let message = format!(
+                "Version {} is available.\n\n{}\n\nDownload and install now?",
+                version, notes
+            );
+            let app_for_install = app.clone();
+            app.dialog()
+                .message(message)
+                .title("Update Available")
+                .buttons(MessageDialogButtons::YesNo)
+                .show(move |confirmed| {
+                    if !confirmed {
+                        return;
+                    }
+                    let app_inner = app_for_install.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = update
+                            .download_and_install(|_chunk, _total| {}, || {})
+                            .await
+                        {
+                            app_inner
+                                .dialog()
+                                .message(format!("Update failed: {}", e))
+                                .title("Magic Hotkey")
+                                .show(|_| {});
+                            return;
+                        }
+                        app_inner.restart();
+                    });
+                });
+        }
+        Ok(None) => {
+            if user_initiated {
+                app.dialog()
+                    .message("You're on the latest version.")
+                    .title("Magic Hotkey")
+                    .show(|_| {});
+            }
+        }
+        Err(e) => {
+            if user_initiated {
+                app.dialog()
+                    .message(format!("Update check failed: {}", e))
+                    .title("Magic Hotkey")
+                    .show(|_| {});
+            }
+        }
+    }
+}
+
+#[tauri::command]
+async fn check_for_updates(app: AppHandle) {
+    check_and_prompt_update(app, true).await;
+}
+
 // ── Tauri commands ──────────────────────────────────────────────────
 
 #[tauri::command]
@@ -521,6 +600,9 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             let main_shortcut = parse_hotkey(&initial_hotkey)
                 .unwrap_or_else(|_| Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyH));
@@ -637,9 +719,11 @@ pub fn run() {
 
             // ── System tray ─────────────────────────────────────────
             let show_item = MenuItemBuilder::with_id("show", "Show").build(app)?;
+            let update_item =
+                MenuItemBuilder::with_id("check_updates", "Check for Updates...").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
             let tray_menu = MenuBuilder::new(app)
-                .items(&[&show_item, &quit_item])
+                .items(&[&show_item, &update_item, &quit_item])
                 .build()?;
 
             let tray_icon = Image::from_bytes(include_bytes!("../../magic-hotkey.png"))
@@ -658,6 +742,12 @@ pub fn run() {
                                 w.show().ok();
                                 w.set_focus().ok();
                             }
+                        }
+                        "check_updates" => {
+                            let handle = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                check_and_prompt_update(handle, true).await;
+                            });
                         }
                         "quit" => {
                             app.exit(0);
@@ -685,6 +775,12 @@ pub fn run() {
             // Store the tray icon in managed state so it isn't dropped
             app.manage(Mutex::new(tray));
 
+            // Check for updates in the background on startup (silent if none).
+            let update_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                check_and_prompt_update(update_handle, false).await;
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -693,6 +789,7 @@ pub fn run() {
             store_secret, delete_secret,
             get_settings, save_settings,
             hide_window, get_config_path, get_autostart_enabled,
+            check_for_updates,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

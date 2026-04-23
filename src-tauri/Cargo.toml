@@ -1,6 +1,6 @@
 [package]
 name = "magic-hotkey"
-version = "0.2.0"
+version = "0.2.1"
 description = "A global hotkey command palette"
 authors = ["towmeykaw"]
 edition = "2021"
@@ -23,6 +23,9 @@ serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-process = "2"
 base64 = "0.22"
 urlencoding = "2"
 quick-xml = "0.37"
