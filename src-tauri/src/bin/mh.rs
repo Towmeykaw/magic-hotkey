@@ -35,6 +35,10 @@ const EXAMPLES: &str = "\x1b[1mExamples:\x1b[0m
   mh run \"My Custom Pipeline\" < input.txt
   mh roll 1d20
   mh roll 3d6+2
+  mh password 20
+  mh password 32 alphanum
+  mh qr \"https://example.com\" > qr.png
+  echo \"hello\" | mh qr > qr.png
   mh list
   mh secret set api_token
   mh secret get api_token";
@@ -142,6 +146,18 @@ enum Commands {
         /// Dice notation: NdM or NdM±K (N defaults to 1)
         #[arg(value_name = "NOTATION")]
         spec: Vec<String>,
+    },
+
+    /// Generate a secure password (length + optional charset keyword)
+    Password {
+        /// Spec: "20", "32 alphanum", "16 hex", "12 numeric", "24 letters" (blank = 20 mixed)
+        spec: Vec<String>,
+    },
+
+    /// Generate a QR code PNG (input as argument or stdin, PNG bytes to stdout)
+    Qr {
+        /// Text to encode; omit to read from stdin
+        text: Option<String>,
     },
 
     /// Manage secrets in the OS keychain
@@ -420,6 +436,28 @@ fn main() {
                     }
                 }
                 Err(e) => { eprintln!("error: {}", e); std::process::exit(1); }
+            }
+        }
+
+        Commands::Password { spec } => {
+            let spec_str = spec.join(" ");
+            run_and_print("password", "", Some(&spec_str));
+        }
+
+        Commands::Qr { text } => {
+            let input = text.unwrap_or_else(|| read_stdin().trim().to_string());
+            match commands::qr_code_png(&input) {
+                Ok(bytes) => {
+                    use std::io::Write;
+                    if let Err(e) = std::io::stdout().write_all(&bytes) {
+                        eprintln!("error: failed to write PNG to stdout: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    std::process::exit(1);
+                }
             }
         }
 

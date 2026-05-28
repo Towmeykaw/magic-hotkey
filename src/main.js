@@ -38,6 +38,8 @@ const ACTIONS = [
   { value: "trim",          label: "Trim whitespace", type: "transformer" },
   { value: "lorem_ipsum",   label: "Lorem Ipsum", type: "generator", hasKey: true },
   { value: "roll",          label: "Roll Dice", type: "generator", keyOptional: true, keyPlaceholder: "e.g. 1d20 (blank = prompt at runtime)", display: true },
+  { value: "password",      label: "Generate Password", type: "generator", keyOptional: true, keyPlaceholder: "e.g. 20, 32 alphanum, 16 hex (blank = 20 mixed)" },
+  { value: "qr_code",       label: "QR Code (image)", type: "transformer", terminal: true },
   { value: "regex_extract", label: "Regex Extract", type: "transformer", hasKey: true },
   { value: "count",         label: "Count", type: "transformer", display: true },
   { value: "snippet",      label: "Snippet (template)", type: "generator", hasTemplate: true },

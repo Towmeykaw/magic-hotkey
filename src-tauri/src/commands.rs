@@ -448,6 +448,93 @@ pub fn roll_dice(spec: &str) -> Result<String, String> {
     serde_json::to_string(&result).map_err(|e| format!("Serialize error: {}", e))
 }
 
+// ── Password generator ───────────────────────────────────────────────
+
+pub fn generate_password(spec: &str) -> Result<String, String> {
+    let trimmed = spec.trim().to_lowercase();
+
+    let mut length: usize = 20;
+    let mut charset_name = "all";
+
+    for token in trimmed.split_whitespace() {
+        if let Ok(n) = token.parse::<usize>() {
+            length = n;
+        } else {
+            charset_name = match token {
+                "alphanum" | "alphanumeric" | "nosymbols" => "alphanum",
+                "letters" | "alpha" => "letters",
+                "numeric" | "digits" => "numeric",
+                "hex" => "hex",
+                "all" | "symbols" => "all",
+                other => {
+                    return Err(format!(
+                        "Unknown password option '{}'. Use one of: alphanum, letters, numeric, hex, all",
+                        other
+                    ))
+                }
+            };
+        }
+    }
+
+    if length == 0 {
+        return Err("Length must be at least 1".into());
+    }
+    if length > 1024 {
+        return Err("Length too high (max 1024)".into());
+    }
+
+    let charset: Vec<char> = match charset_name {
+        "letters" => ('a'..='z').chain('A'..='Z').collect(),
+        "numeric" => ('0'..='9').collect(),
+        "hex" => ('0'..='9').chain('a'..='f').collect(),
+        "alphanum" => ('a'..='z').chain('A'..='Z').chain('0'..='9').collect(),
+        "all" => {
+            let mut v: Vec<char> = ('a'..='z').chain('A'..='Z').chain('0'..='9').collect();
+            v.extend("!@#$%^&*()-_=+[]{};:,.<>?/".chars());
+            v
+        }
+        _ => unreachable!(),
+    };
+
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    let password: String = (0..length)
+        .map(|_| charset[rng.gen_range(0..charset.len())])
+        .collect();
+    Ok(password)
+}
+
+// ── QR code ─────────────────────────────────────────────────────────
+
+fn build_qr_image(input: &str) -> Result<image::ImageBuffer<image::Luma<u8>, Vec<u8>>, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("Input is empty — cannot generate QR code".into());
+    }
+    let code = qrcode::QrCode::new(trimmed.as_bytes())
+        .map_err(|e| format!("QR encode error: {}", e))?;
+    Ok(code
+        .render::<image::Luma<u8>>()
+        .min_dimensions(384, 384)
+        .quiet_zone(true)
+        .build())
+}
+
+pub fn qr_code_png(input: &str) -> Result<Vec<u8>, String> {
+    let img = build_qr_image(input)?;
+    let mut bytes = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+        .map_err(|e| format!("PNG encode error: {}", e))?;
+    Ok(bytes)
+}
+
+pub fn qr_code_rgba(input: &str) -> Result<(Vec<u8>, u32, u32), String> {
+    let img = build_qr_image(input)?;
+    let (w, h) = img.dimensions();
+    let rgba = image::DynamicImage::ImageLuma8(img).to_rgba8();
+    Ok((rgba.into_raw(), w, h))
+}
+
 // ── Regex extract ───────────────────────────────────────────────────
 
 pub fn regex_extract(input: &str, pattern: &str) -> Result<String, String> {
@@ -1387,6 +1474,84 @@ mod tests {
     fn test_roll_caps_limits() {
         assert!(roll_dice("101d6").is_err());
         assert!(roll_dice("1d1001").is_err());
+    }
+
+    // ── Password ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_password_default_length() {
+        assert_eq!(generate_password("").unwrap().len(), 20);
+    }
+
+    #[test]
+    fn test_password_custom_length() {
+        assert_eq!(generate_password("32").unwrap().len(), 32);
+    }
+
+    #[test]
+    fn test_password_alphanum() {
+        let p = generate_password("40 alphanum").unwrap();
+        assert_eq!(p.len(), 40);
+        assert!(p.chars().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn test_password_numeric_only() {
+        let p = generate_password("10 numeric").unwrap();
+        assert!(p.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn test_password_hex_only() {
+        let p = generate_password("16 hex").unwrap();
+        assert!(p
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+    }
+
+    #[test]
+    fn test_password_letters_only() {
+        let p = generate_password("12 letters").unwrap();
+        assert!(p.chars().all(|c| c.is_ascii_alphabetic()));
+    }
+
+    #[test]
+    fn test_password_zero_invalid() {
+        assert!(generate_password("0").is_err());
+    }
+
+    #[test]
+    fn test_password_unknown_option() {
+        assert!(generate_password("12 bogus").is_err());
+    }
+
+    #[test]
+    fn test_password_unique() {
+        let a = generate_password("16").unwrap();
+        let b = generate_password("16").unwrap();
+        assert_ne!(a, b);
+    }
+
+    // ── QR code ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_qr_code_png_signature() {
+        let bytes = qr_code_png("https://example.com").unwrap();
+        assert_eq!(&bytes[..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    }
+
+    #[test]
+    fn test_qr_code_rgba_dimensions() {
+        let (rgba, w, h) = qr_code_rgba("hello").unwrap();
+        assert!(w >= 384);
+        assert!(h >= 384);
+        assert_eq!(rgba.len(), (w * h * 4) as usize);
+    }
+
+    #[test]
+    fn test_qr_code_empty_input() {
+        assert!(qr_code_png("").is_err());
+        assert!(qr_code_png("   ").is_err());
     }
 
     // ── Regex extract ───────────────────────────────────────────────

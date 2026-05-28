@@ -52,6 +52,7 @@ Single-step pipelines work like simple commands. Multi-step pipelines unlock pow
 | `snippet` | Text template with `{{variable}}` placeholders — prompts for each value |
 | `lorem_ipsum` | Generate placeholder text (key: `"50 words"`, `"3 sentences"`, `"2 paragraphs"`) |
 | `roll` | Roll dice — NdM±K notation (key: `1d20`, `3d6+2`, `4d6-1`). Leave key blank to prompt at runtime. |
+| `password` | Generate a secure password (key: `20`, `32 alphanum`, `16 hex`, `12 numeric`, `24 letters`; blank = 20 mixed) |
 
 **Transformers** (transform input, can be chained):
 
@@ -86,6 +87,7 @@ Single-step pipelines work like simple commands. Multi-step pipelines unlock pow
 | `trim` | Trim whitespace |
 | `regex_extract` | Extract regex matches from text (key: regex pattern, supports capture groups) |
 | `count` | Character, word, line, byte count (shown in overlay with copy buttons) |
+| `qr_code` | Encode input text as a QR code PNG, copied to clipboard as an image (terminal step — must be last) |
 
 When a transformer is the first step, it reads from your clipboard.
 
@@ -242,6 +244,15 @@ mh number 0xff
 # Dice
 mh roll 1d20
 mh roll 3d6+2
+
+# Password
+mh password 20
+mh password 32 alphanum
+mh password 16 hex
+
+# QR code (PNG bytes to stdout)
+mh qr "https://example.com" > qr.png
+echo "hello" | mh qr > qr.png
 
 # Chain actions
 echo "hello" | mh pipe base64_encode uppercase trim

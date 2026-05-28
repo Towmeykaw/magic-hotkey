@@ -157,6 +157,8 @@ fn default_commands() -> Vec<CommandDef> {
         cmd("Lorem Ipsum (3 paragraphs)", vec![PipelineStep { action: "lorem_ipsum".into(), key: Some("3 paragraphs".into()), template: None }]),
         cmd("Roll Dice", vec![step("roll")]),
         cmd("Count", vec![step("count")]),
+        cmd("Generate Password", vec![PipelineStep { action: "password".into(), key: Some("20".into()), template: None }]),
+        cmd("QR Code (from clipboard)", vec![step("qr_code")]),
     ]
 }
 
@@ -197,7 +199,7 @@ pub fn load_commands() -> Vec<CommandDef> {
 // ── Pipeline execution ──────────────────────────────────────────────
 
 pub fn is_generator(action: &str) -> bool {
-    matches!(action, "generate_guid" | "secret" | "timestamp_iso" | "timestamp_unix" | "timestamp_utc" | "snippet" | "lorem_ipsum" | "roll")
+    matches!(action, "generate_guid" | "secret" | "timestamp_iso" | "timestamp_unix" | "timestamp_utc" | "snippet" | "lorem_ipsum" | "roll" | "password")
 }
 
 pub fn run_action(action: &str, input: &str, key: Option<&str>) -> Result<String, String> {
@@ -220,6 +222,10 @@ pub fn run_action(action: &str, input: &str, key: Option<&str>) -> Result<String
         "roll" => {
             let spec = key.ok_or("Missing dice notation for roll action (e.g. 1d20, 3d6+2)")?;
             commands::roll_dice(spec)
+        }
+        "password" => {
+            let spec = key.unwrap_or("");
+            commands::generate_password(spec)
         }
         "regex_extract" => {
             let pattern = key.ok_or("Missing regex pattern")?;
@@ -251,6 +257,7 @@ pub fn run_action(action: &str, input: &str, key: Option<&str>) -> Result<String
         "uppercase" => Ok(input.to_uppercase()),
         "lowercase" => Ok(input.to_lowercase()),
         "trim" => Ok(input.trim().to_string()),
+        "qr_code" => Err("qr_code produces an image and must be the last pipeline step (it is handled by the app's clipboard writer, not chainable)".into()),
         other => Err(format!("Unknown action: {}", other)),
     }
 }
@@ -367,24 +374,49 @@ fn maybe_auto_paste() {
     });
 }
 
+fn write_qr_to_clipboard(app: &AppHandle, text: &str) -> Result<String, String> {
+    let (rgba, w, h) = commands::qr_code_rgba(text)?;
+    let image = tauri::image::Image::new(&rgba, w, h);
+    SKIP_CLIPBOARD_CHANGE.store(true, Ordering::Relaxed);
+    app.clipboard()
+        .write_image(&image)
+        .map_err(|e| format!("Failed to write image to clipboard: {}", e))?;
+    Ok("QR code copied to clipboard".to_string())
+}
+
 fn execute_pipeline(app: &AppHandle, steps: &[PipelineStep]) -> Result<String, String> {
     if steps.is_empty() {
         return Err("No steps to execute".to_string());
     }
 
-    let first = &steps[0];
-    let mut value = if is_generator(&first.action) {
-        run_action(&first.action, "", first.key.as_deref())?
-    } else {
-        let clipboard_text = app
-            .clipboard()
+    let last_idx = steps.len() - 1;
+    let is_qr_terminal = steps[last_idx].action == "qr_code";
+    let text_steps: &[PipelineStep] = if is_qr_terminal { &steps[..last_idx] } else { steps };
+
+    let value = if text_steps.is_empty() {
+        // qr_code is the only step — read source text from clipboard
+        app.clipboard()
             .read_text()
-            .map_err(|e| format!("Failed to read clipboard: {}", e))?;
-        run_action(&first.action, &clipboard_text, first.key.as_deref())?
+            .map_err(|e| format!("Failed to read clipboard: {}", e))?
+    } else {
+        let first = &text_steps[0];
+        let mut v = if is_generator(&first.action) {
+            run_action(&first.action, "", first.key.as_deref())?
+        } else {
+            let clip = app
+                .clipboard()
+                .read_text()
+                .map_err(|e| format!("Failed to read clipboard: {}", e))?;
+            run_action(&first.action, &clip, first.key.as_deref())?
+        };
+        for s in &text_steps[1..] {
+            v = run_action(&s.action, &v, s.key.as_deref())?;
+        }
+        v
     };
 
-    for s in &steps[1..] {
-        value = run_action(&s.action, &value, s.key.as_deref())?;
+    if is_qr_terminal {
+        return write_qr_to_clipboard(app, &value);
     }
 
     SKIP_CLIPBOARD_CHANGE.store(true, Ordering::Relaxed);
@@ -497,10 +529,20 @@ fn execute_command(app: AppHandle, steps: Vec<PipelineStep>) -> Result<String, S
 
 #[tauri::command]
 fn execute_with_input(app: AppHandle, input: String, steps: Vec<PipelineStep>) -> Result<String, String> {
+    let (text_steps, is_qr_terminal) = match steps.last() {
+        Some(last) if last.action == "qr_code" => (&steps[..steps.len() - 1], true),
+        _ => (&steps[..], false),
+    };
+
     let mut value = input;
-    for s in &steps {
+    for s in text_steps {
         value = run_action(&s.action, &value, s.key.as_deref())?;
     }
+
+    if is_qr_terminal {
+        return write_qr_to_clipboard(&app, &value);
+    }
+
     SKIP_CLIPBOARD_CHANGE.store(true, Ordering::Relaxed);
     app.clipboard()
         .write_text(&value)

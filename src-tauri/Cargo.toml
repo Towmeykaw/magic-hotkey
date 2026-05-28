@@ -1,6 +1,6 @@
 [package]
 name = "magic-hotkey"
-version = "0.2.1"
+version = "0.3.0"
 description = "A global hotkey command palette"
 authors = ["towmeykaw"]
 edition = "2021"
@@ -42,6 +42,8 @@ clap = { version = "4", features = ["derive"] }
 enigo = "0.6"
 dirs = "6"
 rand = "0.8"
+qrcode = { version = "0.14", default-features = false, features = ["image"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
