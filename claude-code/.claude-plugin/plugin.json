@@ -1,0 +1,7 @@
+{
+  "name": "mh-secrets",
+  "version": "0.1.0",
+  "description": "Use Magic Hotkey keychain secrets in commands without their values reaching the conversation",
+  "license": "MIT",
+  "author": { "name": "Towmeykaw" }
+}
