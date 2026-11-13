@@ -1,11 +1,8 @@
 use base64::{engine::general_purpose, Engine};
-use keyring::Entry;
 use md5::Md5;
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
-
-use crate::SERVICE_NAME;
 
 pub fn generate_guid() -> Result<String, String> {
     Ok(Uuid::new_v4().to_string())
@@ -1026,33 +1023,6 @@ pub fn detect_content(input: &str) -> Vec<String> {
     }
 
     suggestions
-}
-
-// ── Secret operations ───────────────────────────────────────────────
-
-pub fn get_secret(key: &str) -> Result<String, String> {
-    let entry =
-        Entry::new(SERVICE_NAME, key).map_err(|e| format!("Failed to access keychain: {}", e))?;
-    let password = entry
-        .get_password()
-        .map_err(|e| format!("Secret '{}' not found: {}", key, e))?;
-    Ok(password)
-}
-
-pub fn set_secret(key: &str, value: &str) -> Result<(), String> {
-    let entry =
-        Entry::new(SERVICE_NAME, key).map_err(|e| format!("Failed to access keychain: {}", e))?;
-    entry
-        .set_password(value)
-        .map_err(|e| format!("Failed to store secret: {}", e))
-}
-
-pub fn delete_secret(key: &str) -> Result<(), String> {
-    let entry =
-        Entry::new(SERVICE_NAME, key).map_err(|e| format!("Failed to access keychain: {}", e))?;
-    entry
-        .delete_credential()
-        .map_err(|e| format!("Failed to delete secret: {}", e))
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
