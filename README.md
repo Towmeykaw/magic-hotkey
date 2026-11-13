@@ -273,7 +273,13 @@ mh exec -e GH_TOKEN=github_pat -- gh api /user
 mh list
 ```
 
-On Windows the installer puts `mh.exe` next to the app (`C:\Program Files\Magic Hotkey\`). To build it yourself, run `cargo build --bin mh` from the `src-tauri/` directory.
+The installer ships `mh` with the app:
+
+- **Windows:** the MSI adds `C:\Program Files\Magic Hotkey\` to the system PATH. Open a new terminal after installing.
+- **macOS:** link it onto your PATH once:
+  `sudo ln -sf "/Applications/Magic Hotkey.app/Contents/MacOS/mh" /usr/local/bin/mh`
+
+To build it yourself, run `cargo build --bin mh` from the `src-tauri/` directory.
 
 ### Using Secrets Without Revealing Them
 
@@ -302,6 +308,23 @@ mh secret purge                                       # delete all temporary sec
 Temporary secrets are stored in the OS keychain under a separate service (`magic-hotkey-temp`). Once they expire they're deleted, either by the next `mh secret` or `mh exec` call or within a minute if the app is running. On Windows they're also tied to your logon session, so signing out removes them. A temporary secret can't have the same name as a permanent one.
 
 To give an agent a token without it ever seeing the value: copy the token, then ask the agent to run `mh secret set NAME --ttl 30m --from-clipboard`. If Windows clipboard history (Win+V) is turned on, it keeps its own copy of whatever you copied.
+
+### Claude Code Plugin
+
+The `mh-secrets` plugin in [`claude-code/`](claude-code/) lets Claude Code use your secrets without seeing them. It has two parts:
+
+- **A skill** that teaches Claude `mh secret list`, `mh exec`, and the clipboard flow for temporary secrets.
+- **A guard** that refuses `mh secret get`, `mh exec --no-mask`, and `mh run` on a pipeline with a secret step, and points Claude to `mh exec` instead.
+
+Install it at the prompt of a Claude Code terminal session:
+
+```
+/plugin install mh-secrets --marketplace Towmeykaw/magic-hotkey
+```
+
+Answer `y` to add the marketplace, then pick a scope. From a shell, run `claude plugin install mh-secrets --marketplace Towmeykaw/magic-hotkey`.
+
+The guard prevents accidents. It isn't a sandbox: Claude runs as you, so it could still reach the keychain in other ways.
 
 ---
 
@@ -366,8 +389,10 @@ magic-hotkey/
 │   │   └── bin/mh.rs             # CLI tool
 │   ├── capabilities/
 │   │   └── default.json          # Tauri permissions
+│   ├── windows/mh-path.wxs       # MSI fragment that puts mh on PATH
 │   ├── Cargo.toml                # Rust dependencies
 │   └── tauri.conf.json           # Window config, app identity, bundling
+├── claude-code/                  # Claude Code plugin (skill + guard), see .claude-plugin/marketplace.json
 └── package.json
 ```
 
