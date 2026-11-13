@@ -34,6 +34,7 @@ fn variants(value: &str) -> Vec<Vec<u8>> {
     let mut derived = vec![
         urlencoding::encode(value).into_owned(),
         value.bytes().map(|b| format!("{:02x}", b)).collect(),
+        value.bytes().map(|b| format!("{:02X}", b)).collect(),
     ];
     derived.extend(base64_variants(value.as_bytes()));
     out.extend(derived.into_iter().filter(|d| d.len() >= MIN_DERIVED_LEN));
@@ -166,6 +167,14 @@ mod tests {
             let out = run(&[("gh", TOKEN)], &[format!("Authorization: Basic {}", encoded).as_bytes()]);
             let tail = out.rsplit("<masked:gh>").next().unwrap();
             assert!(out.contains("<masked:gh>") && tail.len() <= 3, "user={user}: {out}");
+        }
+    }
+
+    #[test]
+    fn masks_hex_in_either_case() {
+        let lower: String = TOKEN.bytes().map(|b| format!("{:02x}", b)).collect();
+        for hex in [lower.clone(), lower.to_uppercase()] {
+            assert_eq!(run(&[("gh", TOKEN)], &[format!("x={hex}").as_bytes()]), "x=<masked:gh>");
         }
     }
 

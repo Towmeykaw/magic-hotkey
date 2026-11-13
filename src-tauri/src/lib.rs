@@ -376,17 +376,54 @@ fn maybe_auto_paste() {
     });
 }
 
-fn write_qr_to_clipboard(app: &AppHandle, text: &str) -> Result<String, String> {
-    let (rgba, w, h) = commands::qr_code_rgba(text)?;
-    let image = tauri::image::Image::new(&rgba, w, h);
+fn reads_secret(steps: &[PipelineStep]) -> bool {
+    steps.iter().any(|s| s.action == "secret")
+}
+
+fn can_auto_run(steps: &[PipelineStep]) -> bool {
+    !reads_secret(steps)
+        && !steps.iter().any(|s| s.action == "snippet" || (s.action == "roll" && s.key.is_none()))
+}
+
+fn concealed(clipboard: &mut arboard::Clipboard) -> arboard::Set<'_> {
+    let set = clipboard.set();
+    #[cfg(windows)]
+    let set = arboard::SetExtWindows::exclude_from_monitoring(set);
+    #[cfg(target_os = "macos")]
+    let set = arboard::SetExtApple::exclude_from_history(set);
+    set
+}
+
+fn write_text_to_clipboard(app: &AppHandle, text: &str, conceal: bool) -> Result<(), String> {
     SKIP_CLIPBOARD_CHANGE.store(true, Ordering::Relaxed);
-    app.clipboard()
-        .write_image(&image)
-        .map_err(|e| format!("Failed to write image to clipboard: {}", e))?;
+    let result = if conceal {
+        arboard::Clipboard::new()
+            .and_then(|mut cb| concealed(&mut cb).text(text))
+            .map_err(|e| e.to_string())
+    } else {
+        app.clipboard().write_text(text).map_err(|e| e.to_string())
+    };
+    result.map_err(|e| format!("Failed to write to clipboard: {}", e))
+}
+
+fn write_qr_to_clipboard(app: &AppHandle, text: &str, conceal: bool) -> Result<String, String> {
+    let (rgba, w, h) = commands::qr_code_rgba(text)?;
+    SKIP_CLIPBOARD_CHANGE.store(true, Ordering::Relaxed);
+    let result = if conceal {
+        let image = arboard::ImageData { width: w as usize, height: h as usize, bytes: rgba.into() };
+        arboard::Clipboard::new()
+            .and_then(|mut cb| concealed(&mut cb).image(image))
+            .map_err(|e| e.to_string())
+    } else {
+        app.clipboard()
+            .write_image(&tauri::image::Image::new(&rgba, w, h))
+            .map_err(|e| e.to_string())
+    };
+    result.map_err(|e| format!("Failed to write image to clipboard: {}", e))?;
     Ok("QR code copied to clipboard".to_string())
 }
 
-fn execute_pipeline(app: &AppHandle, steps: &[PipelineStep]) -> Result<String, String> {
+fn execute_pipeline(app: &AppHandle, steps: &[PipelineStep], paste: bool) -> Result<String, String> {
     if steps.is_empty() {
         return Err("No steps to execute".to_string());
     }
@@ -417,16 +454,15 @@ fn execute_pipeline(app: &AppHandle, steps: &[PipelineStep]) -> Result<String, S
         v
     };
 
+    let conceal = reads_secret(steps);
     if is_qr_terminal {
-        return write_qr_to_clipboard(app, &value);
+        return write_qr_to_clipboard(app, &value, conceal);
     }
 
-    SKIP_CLIPBOARD_CHANGE.store(true, Ordering::Relaxed);
-    app.clipboard()
-        .write_text(&value)
-        .map_err(|e| format!("Failed to write to clipboard: {}", e))?;
-
-    maybe_auto_paste();
+    write_text_to_clipboard(app, &value, conceal)?;
+    if paste {
+        maybe_auto_paste();
+    }
     Ok(value)
 }
 
@@ -526,7 +562,7 @@ fn save_commands(app: AppHandle, cmds: Vec<CommandDef>) -> Result<(), String> {
 
 #[tauri::command]
 fn execute_command(app: AppHandle, steps: Vec<PipelineStep>) -> Result<String, String> {
-    execute_pipeline(&app, &steps)
+    execute_pipeline(&app, &steps, true)
 }
 
 #[tauri::command]
@@ -541,14 +577,12 @@ fn execute_with_input(app: AppHandle, input: String, steps: Vec<PipelineStep>) -
         value = run_action(&s.action, &value, s.key.as_deref())?;
     }
 
+    let conceal = reads_secret(&steps);
     if is_qr_terminal {
-        return write_qr_to_clipboard(&app, &value);
+        return write_qr_to_clipboard(&app, &value, conceal);
     }
 
-    SKIP_CLIPBOARD_CHANGE.store(true, Ordering::Relaxed);
-    app.clipboard()
-        .write_text(&value)
-        .map_err(|e| format!("Failed to write to clipboard: {}", e))?;
+    write_text_to_clipboard(&app, &value, conceal)?;
     maybe_auto_paste();
     Ok(value)
 }
@@ -735,16 +769,11 @@ pub fn run() {
                         if let Some(ref pattern) = cmd.trigger {
                             if let Ok(re) = regex::Regex::new(pattern) {
                                 if re.is_match(&current) {
-                                    // Skip commands that need runtime prompts (snippets, keyless rolls)
-                                    let needs_prompt = cmd.steps.iter().any(|s|
-                                        s.action == "snippet"
-                                        || (s.action == "roll" && s.key.is_none())
-                                    );
-                                    if needs_prompt {
+                                    if !can_auto_run(&cmd.steps) {
                                         continue;
                                     }
                                     // Execute the pipeline
-                                    if let Ok(_) = execute_pipeline(&trigger_handle, &cmd.steps) {
+                                    if let Ok(_) = execute_pipeline(&trigger_handle, &cmd.steps, false) {
                                         // OS notification
                                         trigger_handle.notification()
                                             .builder()
@@ -842,4 +871,22 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn keyed(action: &str, key: &str) -> PipelineStep {
+        PipelineStep { action: action.into(), key: Some(key.into()), template: None }
+    }
+
+    #[test]
+    fn auto_run_skips_secrets_and_runtime_prompts() {
+        assert!(!can_auto_run(&[keyed("secret", "deploy"), step("base64_encode")]));
+        assert!(!can_auto_run(&[step("snippet")]));
+        assert!(!can_auto_run(&[step("roll")]));
+        assert!(can_auto_run(&[keyed("roll", "1d20")]));
+        assert!(can_auto_run(&[step("jwt_decode")]));
+    }
 }

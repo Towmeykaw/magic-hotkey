@@ -284,7 +284,7 @@ fn resolve_program(program: &str) -> PathBuf {
         return path.to_path_buf();
     }
     let dirs = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+        .map(|p| std::env::split_paths(&p).filter(|d| d.is_absolute()).collect::<Vec<_>>())
         .unwrap_or_default();
     for dir in dirs {
         for ext in ["com", "exe", "bat", "cmd"] {
