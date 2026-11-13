@@ -1,6 +1,6 @@
 [package]
 name = "magic-hotkey"
-version = "0.4.0"
+version = "0.4.1"
 description = "A global hotkey command palette"
 authors = ["towmeykaw"]
 edition = "2021"
