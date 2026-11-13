@@ -587,6 +587,10 @@ async function saveCommand() {
   });
 
   const trigger = cmdTriggerInput.value.trim() || null;
+  if (trigger && steps.some(s => s.action === "secret")) {
+    showToast("Auto-trigger can't run a pipeline that reads a secret", true);
+    return;
+  }
   const hotkey = editingCmdHotkey || null;
   const pinned = (editingCmdIndex >= 0) ? commands[editingCmdIndex].pinned : false;
   const cmd = { name, steps, pinned, hotkey, trigger };
