@@ -15,6 +15,8 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 use tauri_plugin_updater::UpdaterExt;
 
 pub mod commands;
+pub mod mask;
+pub mod secrets;
 
 pub const SERVICE_NAME: &str = "magic-hotkey";
 
@@ -75,7 +77,7 @@ static SKIP_CLIPBOARD_CHANGE: AtomicBool = AtomicBool::new(false);
 
 // ── Config paths ────────────────────────────────────────────────────
 
-fn config_dir() -> PathBuf {
+pub(crate) fn config_dir() -> PathBuf {
     let dir = dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("magic-hotkey");
@@ -212,7 +214,7 @@ pub fn run_action(action: &str, input: &str, key: Option<&str>) -> Result<String
         "date_to_unix" => commands::date_to_unix(input),
         "secret" => {
             let k = key.ok_or("Missing key for secret action")?;
-            commands::get_secret(k)
+            secrets::get(k)
         }
         "lorem_ipsum" => {
             // key holds the count spec (e.g. "5 words", "3 paragraphs")
@@ -572,12 +574,12 @@ fn toggle_pin(name: String) -> Result<(), String> {
 
 #[tauri::command]
 fn store_secret(key: String, value: String) -> Result<(), String> {
-    commands::set_secret(&key, &value)
+    secrets::set(&key, &value)
 }
 
 #[tauri::command]
 fn delete_secret(key: String) -> Result<(), String> {
-    commands::delete_secret(&key)
+    secrets::delete(&key)
 }
 
 #[tauri::command]
@@ -757,6 +759,11 @@ pub fn run() {
                         }
                     }
                 }
+            });
+
+            std::thread::spawn(|| loop {
+                secrets::sweep_expired().ok();
+                std::thread::sleep(std::time::Duration::from_secs(60));
             });
 
             // ── System tray ─────────────────────────────────────────

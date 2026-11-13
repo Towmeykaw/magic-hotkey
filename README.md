@@ -95,6 +95,7 @@ When a transformer is the first step, it reads from your clipboard.
 
 - Secrets are stored in the **OS keychain**, never in config files
 - Sensitive values are only passed through the clipboard, not logged or persisted
+- `mh exec` gives secrets to a command without showing them, and masks them in its output (see [CLI](#cli-mh))
 - No telemetry, no network calls
 
 ## Install
@@ -263,12 +264,44 @@ mh run "My Custom Pipeline" < input.txt
 # Manage secrets
 echo "sk-abc123" | mh secret set api_token
 mh secret get api_token
+mh secret list            # names only, never values
+
+# Run a command with secrets, without revealing them
+mh exec -e GH_TOKEN=github_pat -- gh api /user
 
 # List all pipelines
 mh list
 ```
 
-Build the CLI with `cargo build --bin mh` from the `src-tauri/` directory.
+On Windows the installer puts `mh.exe` next to the app (`C:\Program Files\Magic Hotkey\`). To build it yourself, run `cargo build --bin mh` from the `src-tauri/` directory.
+
+### Using Secrets Without Revealing Them
+
+`mh exec` runs a command with secrets passed in as environment variables. It also masks their values in everything the command prints. Use it to give secrets to scripts, CI jobs or an AI coding agent: the command line and its output only ever show secret *names*.
+
+```bash
+mh exec -e GH_TOKEN=github_pat -- gh api /user
+mh exec -e T=api_token -- sh -c 'curl -sS -H "Authorization: Bearer $T" https://api.example.com/me'
+mh exec --env-file .mhenv -- npm start
+```
+
+- Single-quote the `sh -c` script so `$T` is expanded inside the command, not by your shell.
+- Masking replaces the raw value with `<masked:NAME>`. It also catches the URL-encoded, hex and base64 forms, including a value inside a base64 Basic-auth header.
+- A `.mhenv` file contains only `VAR=secret_name` lines, so it's safe to commit.
+- `--no-mask` sends output straight to the terminal (useful for interactive programs).
+- Masking prevents accidental leaks. It isn't a sandbox: a command that changes the value in some other way (reverses it, for example) can still reveal it.
+
+### Temporary Secrets
+
+```bash
+mh secret set deploy_tmp --ttl 30m --from-clipboard   # copy the token first; the clipboard is cleared afterwards
+echo "$VALUE" | mh secret set deploy_tmp --ttl 2h
+mh secret purge                                       # delete all temporary secrets now
+```
+
+Temporary secrets are stored in the OS keychain under a separate service (`magic-hotkey-temp`). Once they expire they're deleted, either by the next `mh secret` or `mh exec` call or within a minute if the app is running. On Windows they're also tied to your logon session, so signing out removes them. A temporary secret can't have the same name as a permanent one.
+
+To give an agent a token without it ever seeing the value: copy the token, then ask the agent to run `mh secret set NAME --ttl 30m --from-clipboard`. If Windows clipboard history (Win+V) is turned on, it keeps its own copy of whatever you copied.
 
 ---
 
@@ -327,6 +360,8 @@ magic-hotkey/
 │   ├── src/
 │   │   ├── lib.rs                # App setup, pipeline execution, hotkey, IPC
 │   │   ├── commands.rs           # All action implementations
+│   │   ├── secrets.rs            # Keychain access, listing, temporary secrets
+│   │   ├── mask.rs               # Streaming secret masking for `mh exec`
 │   │   ├── main.rs               # Entry point
 │   │   └── bin/mh.rs             # CLI tool
 │   ├── capabilities/

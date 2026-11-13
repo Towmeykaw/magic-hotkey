@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
-use magic_hotkey_lib::{commands, load_commands, run_action};
-use std::io::{self, Read};
+use magic_hotkey_lib::{commands, load_commands, mask::Masker, run_action, secrets};
+use std::io::{self, Read, Write};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 
 /// mh — Magic Hotkey CLI
 ///
@@ -41,7 +43,11 @@ const EXAMPLES: &str = "\x1b[1mExamples:\x1b[0m
   echo \"hello\" | mh qr > qr.png
   mh list
   mh secret set api_token
-  mh secret get api_token";
+  mh secret set deploy_tmp --ttl 30m --from-clipboard
+  mh secret list
+  mh exec -e GH_TOKEN=github_pat -- gh api /user
+  mh exec -e T=api_token -- sh -c 'curl -H \"Authorization: Bearer $T\" https://example.com'
+  mh exec --env-file .mhenv -- npm start";
 
 #[derive(Subcommand)]
 enum Commands {
@@ -166,6 +172,22 @@ enum Commands {
         action: SecretAction,
     },
 
+    /// Run a command with secrets as env vars; their values are masked in its output
+    Exec {
+        /// Inject a secret as an env var: VAR=secret_name (repeatable)
+        #[arg(short = 'e', long = "env", value_name = "VAR=SECRET")]
+        env: Vec<String>,
+        /// File with one VAR=secret_name per line (# starts a comment)
+        #[arg(long, value_name = "FILE")]
+        env_file: Option<PathBuf>,
+        /// Don't mask output; the command writes straight to the terminal
+        #[arg(long)]
+        no_mask: bool,
+        /// Command and its arguments, after --
+        #[arg(last = true, required = true, value_name = "COMMAND")]
+        command: Vec<String>,
+    },
+
     /// List all saved pipelines
     #[command(alias = "ls")]
     List,
@@ -173,15 +195,21 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum SecretAction {
-    /// Get a secret from the keychain
+    /// Print a secret's value (prefer `mh exec` when output is captured or logged)
     Get {
         /// Secret key name
         key: String,
     },
-    /// Set a secret in the keychain (reads value from stdin)
+    /// Set a secret in the keychain (reads value from stdin, or --from-clipboard)
     Set {
         /// Secret key name
         key: String,
+        /// Make it temporary: deleted after this long (e.g. 30m, 2h, 1d)
+        #[arg(long, value_name = "DURATION")]
+        ttl: Option<String>,
+        /// Read the value from the clipboard, then clear the clipboard
+        #[arg(long)]
+        from_clipboard: bool,
     },
     /// Delete a secret from the keychain
     #[command(alias = "rm")]
@@ -189,6 +217,163 @@ enum SecretAction {
         /// Secret key name
         key: String,
     },
+    /// List secret names (never values)
+    #[command(alias = "ls")]
+    List,
+    /// Delete all temporary secrets now
+    Purge,
+}
+
+fn fail(msg: impl std::fmt::Display) -> ! {
+    eprintln!("error: {}", msg);
+    std::process::exit(1)
+}
+
+fn describe_expiry(at: u64) -> String {
+    let local = chrono::DateTime::from_timestamp(at as i64, 0)
+        .map(|d| d.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_default();
+    let left = at.saturating_sub(secrets::now());
+    let left = match left {
+        86400.. => format!("{}d {}h", left / 86400, left % 86400 / 3600),
+        3600.. => format!("{}h {}m", left / 3600, left % 3600 / 60),
+        60.. => format!("{}m", left / 60),
+        _ => format!("{}s", left),
+    };
+    format!("{} (in {})", local, left)
+}
+
+fn set_secret(key: &str, ttl: Option<String>, from_clipboard: bool) {
+    let ttl = ttl.map(|spec| secrets::parse_ttl(&spec).unwrap_or_else(|e| fail(e)));
+    let mut clipboard = from_clipboard
+        .then(|| arboard::Clipboard::new().unwrap_or_else(|e| fail(format!("cannot open clipboard: {}", e))));
+    let raw = match clipboard.as_mut() {
+        Some(cb) => cb.get_text().unwrap_or_default(),
+        None => read_stdin(),
+    };
+    let value = raw.trim();
+    if value.is_empty() {
+        fail(if from_clipboard {
+            "the clipboard has no text"
+        } else {
+            "no value provided (pipe it via stdin or use --from-clipboard)"
+        });
+    }
+    match ttl {
+        Some(ttl) => {
+            let at = secrets::set_temp(key, value, ttl).unwrap_or_else(|e| fail(e));
+            eprintln!("temporary secret '{}' stored, expires {}", key, describe_expiry(at));
+        }
+        None => {
+            secrets::set(key, value).unwrap_or_else(|e| fail(e));
+            eprintln!("secret '{}' stored", key);
+        }
+    }
+    if let Some(cb) = clipboard.as_mut() {
+        match cb.clear() {
+            Ok(()) => eprintln!("clipboard cleared"),
+            Err(e) => eprintln!("warning: could not clear the clipboard: {}", e),
+        }
+    }
+}
+
+#[cfg(windows)]
+fn resolve_program(program: &str) -> PathBuf {
+    let path = std::path::Path::new(program);
+    if path.extension().is_some() || path.components().count() > 1 {
+        return path.to_path_buf();
+    }
+    let dirs = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+        .unwrap_or_default();
+    for dir in dirs {
+        for ext in ["com", "exe", "bat", "cmd"] {
+            let candidate = dir.join(program).with_extension(ext);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    path.to_path_buf()
+}
+
+#[cfg(not(windows))]
+fn resolve_program(program: &str) -> PathBuf {
+    PathBuf::from(program)
+}
+
+// Keeps draining after the destination closes so the child never blocks on a full pipe.
+fn pump(mut src: impl Read, mut dst: impl Write, mut masker: Masker) {
+    let mut buf = [0u8; 8192];
+    let mut open = true;
+    loop {
+        let n = match src.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        };
+        let masked = masker.push(&buf[..n]);
+        if open {
+            open = dst.write_all(&masked).and_then(|_| dst.flush()).is_ok();
+        }
+    }
+    if open {
+        dst.write_all(&masker.finish()).and_then(|_| dst.flush()).ok();
+    }
+}
+
+fn exec(env: Vec<String>, env_file: Option<PathBuf>, no_mask: bool, command: Vec<String>) -> Result<i32, String> {
+    let mut specs = Vec::new();
+    if let Some(path) = env_file {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+        specs.extend(
+            text.lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(String::from),
+        );
+    }
+    specs.extend(env);
+
+    let mut vars = Vec::new();
+    let mut named = Vec::new();
+    for spec in &specs {
+        let (var, name) = spec
+            .split_once('=')
+            .map(|(v, n)| (v.trim(), n.trim()))
+            .filter(|(v, n)| !v.is_empty() && !n.is_empty())
+            .ok_or_else(|| format!("expected VAR=secret_name, got '{}'", spec))?;
+        let value = secrets::get(name)?;
+        vars.push((var.to_string(), value.clone()));
+        named.push((name.to_string(), value));
+    }
+
+    let mut cmd = Command::new(resolve_program(&command[0]));
+    cmd.args(&command[1..]).envs(vars);
+    let spawn_err = |e: io::Error| format!("failed to run '{}': {}", command[0], e);
+
+    if no_mask {
+        let status = cmd.status().map_err(spawn_err)?;
+        return Ok(status.code().unwrap_or(1));
+    }
+
+    let mask_out = Masker::new(&named)?;
+    let mask_err = Masker::new(&named)?;
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(spawn_err)?;
+    let out = child.stdout.take().ok_or("child stdout unavailable")?;
+    let err = child.stderr.take().ok_or("child stderr unavailable")?;
+    let t_out = std::thread::spawn(move || pump(out, io::stdout(), mask_out));
+    let t_err = std::thread::spawn(move || pump(err, io::stderr(), mask_err));
+    let status = child.wait().map_err(|e| format!("failed waiting for '{}': {}", command[0], e))?;
+    t_out.join().ok();
+    t_err.join().ok();
+    Ok(status.code().unwrap_or(1))
 }
 
 fn read_stdin() -> String {
@@ -461,28 +646,45 @@ fn main() {
             }
         }
 
-        Commands::Secret { action } => match action {
-            SecretAction::Get { key } => {
-                run_and_print("secret", "", Some(&key));
-            }
-            SecretAction::Set { key } => {
-                let value = read_stdin().trim().to_string();
-                if value.is_empty() {
-                    eprintln!("error: no value provided (pipe the value via stdin)");
-                    std::process::exit(1);
+        Commands::Secret { action } => {
+            secrets::sweep_expired().ok();
+            match action {
+                SecretAction::Get { key } => {
+                    run_and_print("secret", "", Some(&key));
                 }
-                match commands::set_secret(&key, &value) {
-                    Ok(_) => eprintln!("secret '{}' stored", key),
-                    Err(e) => { eprintln!("error: {}", e); std::process::exit(1); }
+                SecretAction::Set { key, ttl, from_clipboard } => {
+                    set_secret(&key, ttl, from_clipboard);
+                }
+                SecretAction::Delete { key } => {
+                    secrets::delete(&key).unwrap_or_else(|e| fail(e));
+                    eprintln!("secret '{}' deleted", key);
+                }
+                SecretAction::List => {
+                    let list = secrets::list().unwrap_or_else(|e| fail(e));
+                    if list.is_empty() {
+                        eprintln!("no secrets stored");
+                    }
+                    for s in list {
+                        match s.expires_at {
+                            None => println!("{}", s.name),
+                            Some(at) => println!("{:30} temporary, expires {}", s.name, describe_expiry(at)),
+                        }
+                    }
+                }
+                SecretAction::Purge => {
+                    let n = secrets::purge_temp().unwrap_or_else(|e| fail(e));
+                    eprintln!("deleted {} temporary secret(s)", n);
                 }
             }
-            SecretAction::Delete { key } => {
-                match commands::delete_secret(&key) {
-                    Ok(_) => eprintln!("secret '{}' deleted", key),
-                    Err(e) => { eprintln!("error: {}", e); std::process::exit(1); }
-                }
+        }
+
+        Commands::Exec { env, env_file, no_mask, command } => {
+            secrets::sweep_expired().ok();
+            match exec(env, env_file, no_mask, command) {
+                Ok(code) => std::process::exit(code),
+                Err(e) => fail(e),
             }
-        },
+        }
 
         Commands::List => {
             let cmds = load_commands();
