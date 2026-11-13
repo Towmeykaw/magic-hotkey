@@ -1,0 +1,12 @@
+{
+  "name": "magic-hotkey",
+  "owner": { "name": "Towmeykaw" },
+  "description": "Claude Code plugins for Magic Hotkey",
+  "plugins": [
+    {
+      "name": "mh-secrets",
+      "source": "./claude-code",
+      "description": "Use Magic Hotkey keychain secrets in commands without their values reaching the conversation"
+    }
+  ]
+}
